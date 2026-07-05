@@ -97,17 +97,39 @@ export const EDITOR_SCRIPT = `
 
   function makeAbsolute(el) {
     if (getComputedStyle(el).position === 'absolute') return;
+    var tag = el.tagName.toLowerCase();
+    var replaced = ['img','iframe','video','canvas','svg'].indexOf(tag) >= 0;
     var sr = SLIDE.getBoundingClientRect();
     var r = el.getBoundingClientRect();
+    var cs = getComputedStyle(el);
     el.style.position = 'absolute';
     el.style.left = Math.round(r.left - sr.left) + 'px';
     el.style.top = Math.round(r.top - sr.top) + 'px';
-    el.style.width = Math.round(r.width) + 'px';
-    el.style.margin = '0';
+    if (replaced || (cs.width && cs.width !== 'auto' && cs.width !== '0px')) {
+      el.style.width = Math.round(r.width) + 'px';
+    }
+    if (replaced || (cs.height && cs.height !== 'auto' && cs.height !== '0px')) {
+      el.style.height = Math.round(r.height) + 'px';
+    }
   }
 
   function isEditable(el) {
     return el && el !== SLIDE && el.closest && el.closest('[data-eid]') === el && el.hasAttribute && el.hasAttribute('data-eid');
+  }
+
+  // 找到最高层（最接近 SLIDE）的可编辑祖先，避免选中 span/strong/em 等内联子元素导致拖拽时脱离文档流
+  function findTopEditable(target) {
+    var el = target.closest ? target.closest('[data-eid]') : null;
+    if (!el || el === SLIDE) return null;
+    var top = el;
+    var p = el.parentElement;
+    while (p && p !== SLIDE && p !== document.body && p.parentElement) {
+      if (p.hasAttribute && p.hasAttribute('data-eid') && p !== SLIDE) {
+        top = p;
+      }
+      p = p.parentElement;
+    }
+    return top === SLIDE ? null : top;
   }
 
   function emitUpdate() {
@@ -121,37 +143,45 @@ export const EDITOR_SCRIPT = `
   }
 
   // ---- 拖拽移动 ----
+  var DRAG_THRESHOLD = 5;
   var dragState = null;
-  function startDrag(e) {
+  function startDrag(e, el) {
     if (editing) return;
-    var el = e.target.closest('[data-eid]');
+    if (!el) el = findTopEditable(e.target);
     if (!el || el === SLIDE) return;
     e.preventDefault();
     e.stopPropagation();
     selectEl(el);
     dragState = {
       startX: e.clientX, startY: e.clientY,
-      origLeft: parseFloat(el.style.left) || 0,
-      origTop: parseFloat(el.style.top) || 0,
-      madeAbsolute: false
+      origLeft: 0, origTop: 0,
+      active: false
     };
-    post({ type: 'begin' });
     document.addEventListener('mousemove', onDrag);
     document.addEventListener('mouseup', endDrag);
   }
 
   function onDrag(e) {
     if (!dragState || !selected) return;
-    if (!dragState.madeAbsolute) {
-      makeAbsolute(selected);
-      dragState.madeAbsolute = true;
-      dragState.origLeft = parseFloat(selected.style.left) || 0;
-      dragState.origTop = parseFloat(selected.style.top) || 0;
-    }
     var dx = e.clientX - dragState.startX;
     var dy = e.clientY - dragState.startY;
-    selected.style.left = (dragState.origLeft + dx) + 'px';
-    selected.style.top = (dragState.origTop + dy) + 'px';
+    if (!dragState.active) {
+      if (dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD) return;
+      if (getComputedStyle(selected).position !== 'absolute') {
+        makeAbsolute(selected);
+      }
+      var sr = SLIDE.getBoundingClientRect();
+      var r0 = selected.getBoundingClientRect();
+      dragState.origLeft = Math.round(r0.left - sr.left);
+      dragState.origTop = Math.round(r0.top - sr.top);
+      dragState.startX = e.clientX;
+      dragState.startY = e.clientY;
+      dragState.active = true;
+      post({ type: 'begin' });
+      return;
+    }
+    selected.style.left = (dragState.origLeft + (e.clientX - dragState.startX)) + 'px';
+    selected.style.top = (dragState.origTop + (e.clientY - dragState.startY)) + 'px';
     positionOverlay();
     emitUpdate();
   }
@@ -160,55 +190,61 @@ export const EDITOR_SCRIPT = `
     document.removeEventListener('mousemove', onDrag);
     document.removeEventListener('mouseup', endDrag);
     if (dragState) {
+      var wasActive = dragState.active;
       dragState = null;
-      post({ type: 'end' });
+      if (wasActive) {
+        post({ type: 'end' });
+      }
       if (selected) post({ type: 'select', id: selected.getAttribute('data-eid'), tag: selected.tagName.toLowerCase(), styles: readStyles(selected) });
     }
   }
 
   // ---- 缩放 ----
+  var RESIZE_THRESHOLD = 3;
   var resizeState = null;
   function startResize(e) {
     if (!selected) return;
     e.preventDefault();
     e.stopPropagation();
     var dir = e.target.getAttribute('data-dir');
-    var r = selected.getBoundingClientRect();
     resizeState = {
       dir: dir, startX: e.clientX, startY: e.clientY,
-      left: parseFloat(selected.style.left) || (r.left - SLIDE.getBoundingClientRect().left),
-      top: parseFloat(selected.style.top) || (r.top - SLIDE.getBoundingClientRect().top),
-      width: r.width, height: r.height,
-      madeAbsolute: false
+      left: 0, top: 0, width: 0, height: 0,
+      active: false
     };
-    post({ type: 'begin' });
     document.addEventListener('mousemove', onResize);
     document.addEventListener('mouseup', endResize);
   }
 
   function onResize(e) {
     if (!resizeState || !selected) return;
-    if (!resizeState.madeAbsolute) {
-      var isAbsolute = getComputedStyle(selected).position === 'absolute';
-      if (!isAbsolute) {
-        makeAbsolute(selected);
-        var sr2 = SLIDE.getBoundingClientRect();
-        var r2 = selected.getBoundingClientRect();
-        resizeState.left = r2.left - sr2.left;
-        resizeState.top = r2.top - sr2.top;
-        resizeState.width = r2.width;
-        resizeState.height = r2.height;
-      }
-      resizeState.madeAbsolute = true;
-    }
     var dx = e.clientX - resizeState.startX;
     var dy = e.clientY - resizeState.startY;
+    if (!resizeState.active) {
+      if (dx * dx + dy * dy < RESIZE_THRESHOLD * RESIZE_THRESHOLD) return;
+      if (getComputedStyle(selected).position !== 'absolute') {
+        makeAbsolute(selected);
+      }
+      var sr2 = SLIDE.getBoundingClientRect();
+      var r2 = selected.getBoundingClientRect();
+      resizeState.left = Math.round(r2.left - sr2.left);
+      resizeState.top = Math.round(r2.top - sr2.top);
+      resizeState.width = r2.width;
+      resizeState.height = r2.height;
+      resizeState.startX = e.clientX;
+      resizeState.startY = e.clientY;
+      resizeState.active = true;
+      post({ type: 'begin' });
+      return;
+    }
+    var ddx = e.clientX - resizeState.startX;
+    var ddy = e.clientY - resizeState.startY;
     var d = resizeState.dir;
     var nw = resizeState.width, nh = resizeState.height, nl = resizeState.left, nt = resizeState.top;
-    if (d.indexOf('e') >= 0) nw = Math.max(20, resizeState.width + dx);
-    if (d.indexOf('s') >= 0) nh = Math.max(20, resizeState.height + dy);
-    if (d.indexOf('w') >= 0) { nw = Math.max(20, resizeState.width - dx); nl = resizeState.left + dx; }
-    if (d.indexOf('n') >= 0) { nh = Math.max(20, resizeState.height - dy); nt = resizeState.top + dy; }
+    if (d.indexOf('e') >= 0) nw = Math.max(20, resizeState.width + ddx);
+    if (d.indexOf('s') >= 0) nh = Math.max(20, resizeState.height + ddy);
+    if (d.indexOf('w') >= 0) { nw = Math.max(20, resizeState.width - ddx); nl = resizeState.left + ddx; }
+    if (d.indexOf('n') >= 0) { nh = Math.max(20, resizeState.height - ddy); nt = resizeState.top + ddy; }
     selected.style.width = Math.round(nw) + 'px';
     selected.style.height = Math.round(nh) + 'px';
     selected.style.left = Math.round(nl) + 'px';
@@ -221,8 +257,11 @@ export const EDITOR_SCRIPT = `
     document.removeEventListener('mousemove', onResize);
     document.removeEventListener('mouseup', endResize);
     if (resizeState) {
+      var wasActive = resizeState.active;
       resizeState = null;
-      post({ type: 'end' });
+      if (wasActive) {
+        post({ type: 'end' });
+      }
       if (selected) post({ type: 'select', id: selected.getAttribute('data-eid'), tag: selected.tagName.toLowerCase(), styles: readStyles(selected) });
     }
   }
@@ -253,17 +292,17 @@ export const EDITOR_SCRIPT = `
 
   // ---- 事件绑定 ----
   document.addEventListener('mousedown', function (e) {
-    var el = e.target.closest('[data-eid]');
-    if (el && el !== SLIDE) {
-      startDrag(e);
+    var el = findTopEditable(e.target);
+    if (el) {
+      startDrag(e, el);
     } else if (!e.target.closest('[data-dir]') && !e.target.hasAttribute('data-eid')) {
       deselect();
     }
   });
 
   document.addEventListener('dblclick', function (e) {
-    var el = e.target.closest('[data-eid]');
-    if (el && el !== SLIDE) {
+    var el = findTopEditable(e.target);
+    if (el) {
       selectEl(el);
       startEdit(e);
     }
@@ -288,8 +327,12 @@ export const EDITOR_SCRIPT = `
     } else if (cmd.type === 'applyStyle') {
       var t = SLIDE.querySelector('[data-eid="' + cssEscape(cmd.id) + '"]');
       if (!t) return;
-      if (!getComputedStyle(t).position || getComputedStyle(t).position === 'static') {
-        // 仅在元素需要绝对定位时转换；字体等样式无需
+      var needsAbs = false;
+      Object.keys(cmd.styles).forEach(function (k) {
+        if (['left','top','width','height'].indexOf(k) >= 0) needsAbs = true;
+      });
+      if (needsAbs && getComputedStyle(t).position !== 'absolute') {
+        makeAbsolute(t);
       }
       Object.keys(cmd.styles).forEach(function (k) { t.style[k] = cmd.styles[k]; });
       if (selected === t) positionOverlay();

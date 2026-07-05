@@ -93,9 +93,9 @@ export function renderSlideForFrame(doc: SlideDocument, slideIndex: number, edit
   // 注入：原 head + 编辑器脚本 + 使 section 可定位
   const wrapperStyle = `
     <style data-editor="true">
-      html, body { margin: 0; padding: 0; }
+      html, body { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; }
       [data-eid] { cursor: move; }
-      ${slide.tag} { position: relative; min-height: 100vh; box-sizing: border-box; }
+      ${slide.tag} { position: relative; width: 100%; height: 100%; overflow: hidden; box-sizing: border-box; }
     </style>
   `;
 
@@ -118,7 +118,7 @@ ${slideHTML}
 }
 
 // 为可编辑文本/图片/视频元素打上 data-eid
-const EDITABLE_TAGS = ["H1", "H2", "H3", "H4", "H5", "H6", "P", "SPAN", "DIV", "IMG", "LI", "BLOCKQUOTE", "IFRAME", "VIDEO", "A", "LABEL", "STRONG", "EM"];
+const EDITABLE_TAGS = ["H1", "H2", "H3", "H4", "H5", "H6", "P", "SPAN", "DIV", "IMG", "LI", "UL", "OL", "BLOCKQUOTE", "IFRAME", "VIDEO", "A", "LABEL", "STRONG", "EM", "FIGURE", "TABLE"];
 export function tagEditableElements(html: string): string {
   const wrapper = document.createElement("div");
   wrapper.innerHTML = html;
