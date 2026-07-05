@@ -59,11 +59,12 @@ export default function SlidePanel() {
             key={slide.id}
             onClick={() => setCurrentSlide(i)}
             className={cn(
-              "group relative cursor-pointer rounded-lg border p-1.5 transition-all",
+              "group relative cursor-pointer rounded-lg p-1.5 transition-all ring-1",
               i === current
-                ? "border-amber bg-amber-soft"
-                : "border-ink-700 hover:border-ink-600 bg-ink-850",
+                ? "ring-amber bg-amber-soft shadow-glow"
+                : "ring-ink-700 hover:ring-ink-600 bg-ink-850",
             )}
+            style={{ height: THUMB_W * (9 / 16) + 36 }}
           >
             <div className="mb-1.5 flex items-center justify-between px-0.5">
               <span
@@ -86,7 +87,7 @@ export default function SlidePanel() {
               </button>
             </div>
             <div
-              className="overflow-hidden rounded bg-white"
+              className="pointer-events-none overflow-hidden rounded bg-white"
               style={{ width: THUMB_W, height: THUMB_W * (9 / 16) }}
             >
               <div
