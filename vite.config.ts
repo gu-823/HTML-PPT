@@ -5,6 +5,8 @@ import { traeBadgePlugin } from 'vite-plugin-trae-solo-badge';
 
 // https://vite.dev/config/
 export default defineConfig({
+  // GitHub Pages 部署在子路径 /HTML-PPT/ 下
+  base: '/HTML-PPT/',
   build: {
     sourcemap: 'hidden',
   },
