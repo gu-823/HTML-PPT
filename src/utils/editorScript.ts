@@ -117,19 +117,59 @@ export const EDITOR_SCRIPT = `
     return el && el !== SLIDE && el.closest && el.closest('[data-eid]') === el && el.hasAttribute && el.hasAttribute('data-eid');
   }
 
-  // 找到最高层（最接近 SLIDE）的可编辑祖先，避免选中 span/strong/em 等内联子元素导致拖拽时脱离文档流
+  // 判断是否是需要“视为整体”的替换元素
+  function isReplacedElement(el) {
+    if (!el) return false;
+    var tag = el.tagName.toLowerCase();
+    return ['img','iframe','video','canvas','svg','audio','embed','object'].indexOf(tag) >= 0;
+  }
+
+  // 判断是否是内联文本子元素（选中它们会破坏文本流）
+  function isInlineTextElement(el) {
+    if (!el) return false;
+    var tag = el.tagName.toLowerCase();
+    return ['span','strong','em','b','i','a','small','label','sub','sup','code'].indexOf(tag) >= 0;
+  }
+
+  // 判断元素是否是“容器型”元素（div/section 等）
+  function isContainer(el) {
+    if (!el) return false;
+    var tag = el.tagName.toLowerCase();
+    return ['div','section','article','aside','header','footer','main','nav','figure','li','td','th'].indexOf(tag) >= 0;
+  }
+
+  // 判断元素是否是块级文本元素
+  function isBlockTextElement(el) {
+    if (!el) return false;
+    var tag = el.tagName.toLowerCase();
+    return ['h1','h2','h3','h4','h5','h6','p','blockquote'].indexOf(tag) >= 0;
+  }
+
+  // 找到合适的可编辑元素：
+  // - 点击替换元素（video/iframe/img）本身时，选中它自己
+  // - 点击块级文本元素（h1-h6/p/blockquote）本身时，选中它自己，允许独立移动
+  // - 点击内联文本子元素时，向上找到最近的块级可编辑容器
   function findTopEditable(target) {
     var el = target.closest ? target.closest('[data-eid]') : null;
     if (!el || el === SLIDE) return null;
-    var top = el;
-    var p = el.parentElement;
-    while (p && p !== SLIDE && p !== document.body && p.parentElement) {
-      if (p.hasAttribute && p.hasAttribute('data-eid') && p !== SLIDE) {
-        top = p;
+
+    // 替换元素直接返回自身，便于拖拽/缩放
+    if (isReplacedElement(el)) return el;
+
+    // 块级文本元素直接返回自身，方便单独移动小标题/段落
+    if (isBlockTextElement(el)) return el;
+
+    // 如果当前元素是内联文本，向上找最近的块级/容器可编辑祖先
+    if (isInlineTextElement(el)) {
+      var p = el.parentElement;
+      while (p && p !== SLIDE && p !== document.body) {
+        if (p.hasAttribute && p.hasAttribute('data-eid')) return p;
+        p = p.parentElement;
       }
-      p = p.parentElement;
+      return el;
     }
-    return top === SLIDE ? null : top;
+
+    return el;
   }
 
   function emitUpdate() {
@@ -145,6 +185,18 @@ export const EDITOR_SCRIPT = `
   // ---- 拖拽移动 ----
   var DRAG_THRESHOLD = 5;
   var dragState = null;
+  function disablePointerEvents(el) {
+    if (!el) return;
+    if (isReplacedElement(el) || isReplacedElement(el.querySelector('iframe, video'))) {
+      el.dataset.prevPointerEvents = el.style.pointerEvents || '';
+      el.style.pointerEvents = 'none';
+    }
+  }
+  function restorePointerEvents(el) {
+    if (!el || !el.dataset.prevPointerEvents) return;
+    el.style.pointerEvents = el.dataset.prevPointerEvents;
+    delete el.dataset.prevPointerEvents;
+  }
   function startDrag(e, el) {
     if (editing) return;
     if (!el) el = findTopEditable(e.target);
@@ -152,6 +204,7 @@ export const EDITOR_SCRIPT = `
     e.preventDefault();
     e.stopPropagation();
     selectEl(el);
+    disablePointerEvents(el);
     dragState = {
       startX: e.clientX, startY: e.clientY,
       origLeft: 0, origTop: 0,
@@ -191,11 +244,15 @@ export const EDITOR_SCRIPT = `
     document.removeEventListener('mouseup', endDrag);
     if (dragState) {
       var wasActive = dragState.active;
+      var el = selected;
       dragState = null;
       if (wasActive) {
         post({ type: 'end' });
       }
-      if (selected) post({ type: 'select', id: selected.getAttribute('data-eid'), tag: selected.tagName.toLowerCase(), styles: readStyles(selected) });
+      if (el) {
+        restorePointerEvents(el);
+        post({ type: 'select', id: el.getAttribute('data-eid'), tag: el.tagName.toLowerCase(), styles: readStyles(el) });
+      }
     }
   }
 
@@ -207,6 +264,7 @@ export const EDITOR_SCRIPT = `
     e.preventDefault();
     e.stopPropagation();
     var dir = e.target.getAttribute('data-dir');
+    disablePointerEvents(selected);
     resizeState = {
       dir: dir, startX: e.clientX, startY: e.clientY,
       left: 0, top: 0, width: 0, height: 0,
@@ -258,19 +316,22 @@ export const EDITOR_SCRIPT = `
     document.removeEventListener('mouseup', endResize);
     if (resizeState) {
       var wasActive = resizeState.active;
+      var el = selected;
       resizeState = null;
       if (wasActive) {
         post({ type: 'end' });
       }
-      if (selected) post({ type: 'select', id: selected.getAttribute('data-eid'), tag: selected.tagName.toLowerCase(), styles: readStyles(selected) });
+      if (el) {
+        restorePointerEvents(el);
+        post({ type: 'select', id: el.getAttribute('data-eid'), tag: el.tagName.toLowerCase(), styles: readStyles(el) });
+      }
     }
   }
 
   // ---- 内联文本编辑 ----
   function startEdit(e) {
     if (editing || !selected) return;
-    var tag = selected.tagName.toLowerCase();
-    if (['img','iframe','video'].indexOf(tag) >= 0) return;
+    if (isReplacedElement(selected)) return;
     e.preventDefault();
     e.stopPropagation();
     editing = true;
