@@ -85,6 +85,7 @@ export const EDITOR_SCRIPT = `
     selected = el;
     buildOverlay();
     positionOverlay();
+    ensureGlassForSelected();
     post({ type: 'select', id: el.getAttribute('data-eid'), tag: el.tagName.toLowerCase(), styles: readStyles(el) });
   }
 
@@ -92,6 +93,7 @@ export const EDITOR_SCRIPT = `
     if (editing) return;
     selected = null;
     if (overlay) overlay.style.left = '-9999px';
+    removeGlass();
     post({ type: 'select', id: null, tag: '', styles: {} });
   }
 
@@ -185,18 +187,37 @@ export const EDITOR_SCRIPT = `
   // ---- 拖拽移动 ----
   var DRAG_THRESHOLD = 5;
   var dragState = null;
-  function disablePointerEvents(el) {
+  var interactionGlass = null;
+
+  // 在 iframe/video 等替换元素上盖一个透明玻璃层，接管鼠标事件。
+  // 原因：跨域 iframe 一旦收到 mousedown，后续 mousemove/mouseup 会被 iframe 吞掉，父文档收不到。
+  // 因此必须在父文档里放一个 div 盖在上面，让所有鼠标事件都在父文档的这个 div 上发生。
+  function attachGlass(el) {
+    removeGlass();
     if (!el) return;
-    if (isReplacedElement(el) || isReplacedElement(el.querySelector('iframe, video'))) {
-      el.dataset.prevPointerEvents = el.style.pointerEvents || '';
-      el.style.pointerEvents = 'none';
+    if (!isReplacedElement(el)) return;
+    var r = el.getBoundingClientRect();
+    var glass = document.createElement('div');
+    glass.setAttribute('data-editor-glass', '1');
+    glass.style.cssText = 'position:fixed;left:' + r.left + 'px;top:' + r.top + 'px;width:' + r.width + 'px;height:' + r.height + 'px;background:transparent;z-index:99997;cursor:move;';
+    document.body.appendChild(glass);
+    interactionGlass = glass;
+  }
+  function removeGlass() {
+    if (interactionGlass && interactionGlass.parentNode) {
+      interactionGlass.parentNode.removeChild(interactionGlass);
+    }
+    interactionGlass = null;
+  }
+  // 选中替换元素时也覆盖一层玻璃，保证点击/拖拽/缩放都能在父文档处理
+  function ensureGlassForSelected() {
+    if (selected && isReplacedElement(selected)) {
+      attachGlass(selected);
+    } else {
+      removeGlass();
     }
   }
-  function restorePointerEvents(el) {
-    if (!el || !el.dataset.prevPointerEvents) return;
-    el.style.pointerEvents = el.dataset.prevPointerEvents;
-    delete el.dataset.prevPointerEvents;
-  }
+
   function startDrag(e, el) {
     if (editing) return;
     if (!el) el = findTopEditable(e.target);
@@ -204,7 +225,8 @@ export const EDITOR_SCRIPT = `
     e.preventDefault();
     e.stopPropagation();
     selectEl(el);
-    disablePointerEvents(el);
+    // 立即在替换元素上盖玻璃层，抢在浏览器把事件交给 iframe 之前
+    if (isReplacedElement(el)) attachGlass(el);
     dragState = {
       startX: e.clientX, startY: e.clientY,
       origLeft: 0, origTop: 0,
@@ -236,6 +258,14 @@ export const EDITOR_SCRIPT = `
     selected.style.left = (dragState.origLeft + (e.clientX - dragState.startX)) + 'px';
     selected.style.top = (dragState.origTop + (e.clientY - dragState.startY)) + 'px';
     positionOverlay();
+    // 拖拽过程中保持玻璃层与选中元素位置对齐
+    if (interactionGlass && isReplacedElement(selected)) {
+      var rr = selected.getBoundingClientRect();
+      interactionGlass.style.left = rr.left + 'px';
+      interactionGlass.style.top = rr.top + 'px';
+      interactionGlass.style.width = rr.width + 'px';
+      interactionGlass.style.height = rr.height + 'px';
+    }
     emitUpdate();
   }
 
@@ -250,10 +280,11 @@ export const EDITOR_SCRIPT = `
         post({ type: 'end' });
       }
       if (el) {
-        restorePointerEvents(el);
         post({ type: 'select', id: el.getAttribute('data-eid'), tag: el.tagName.toLowerCase(), styles: readStyles(el) });
       }
     }
+    // 拖拽结束后保留玻璃层（选中态下仍需要），由 selectEl/deselect 决定是否保留
+    ensureGlassForSelected();
   }
 
   // ---- 缩放 ----
@@ -264,7 +295,8 @@ export const EDITOR_SCRIPT = `
     e.preventDefault();
     e.stopPropagation();
     var dir = e.target.getAttribute('data-dir');
-    disablePointerEvents(selected);
+    // 缩放时确保替换元素上有玻璃层
+    if (isReplacedElement(selected)) attachGlass(selected);
     resizeState = {
       dir: dir, startX: e.clientX, startY: e.clientY,
       left: 0, top: 0, width: 0, height: 0,
@@ -308,6 +340,14 @@ export const EDITOR_SCRIPT = `
     selected.style.left = Math.round(nl) + 'px';
     selected.style.top = Math.round(nt) + 'px';
     positionOverlay();
+    // 缩放过程中同步玻璃层位置尺寸
+    if (interactionGlass && isReplacedElement(selected)) {
+      var rr = selected.getBoundingClientRect();
+      interactionGlass.style.left = rr.left + 'px';
+      interactionGlass.style.top = rr.top + 'px';
+      interactionGlass.style.width = rr.width + 'px';
+      interactionGlass.style.height = rr.height + 'px';
+    }
     emitUpdate();
   }
 
@@ -322,10 +362,10 @@ export const EDITOR_SCRIPT = `
         post({ type: 'end' });
       }
       if (el) {
-        restorePointerEvents(el);
         post({ type: 'select', id: el.getAttribute('data-eid'), tag: el.tagName.toLowerCase(), styles: readStyles(el) });
       }
     }
+    ensureGlassForSelected();
   }
 
   // ---- 内联文本编辑 ----
@@ -353,10 +393,19 @@ export const EDITOR_SCRIPT = `
 
   // ---- 事件绑定 ----
   document.addEventListener('mousedown', function (e) {
+    // 如果点击了玻璃层（覆盖在 iframe/video 上的透明代理），视为点击了当前选中的替换元素
+    if (e.target === interactionGlass && selected) {
+      startDrag(e, selected);
+      return;
+    }
+    // 点击 resize 手柄，不做任何处理（startResize 在手柄自身的 mousedown 绑定中触发）
+    if (e.target.getAttribute && e.target.getAttribute('data-dir')) {
+      return;
+    }
     var el = findTopEditable(e.target);
     if (el) {
       startDrag(e, el);
-    } else if (!e.target.closest('[data-dir]') && !e.target.hasAttribute('data-eid')) {
+    } else if (!e.target.hasAttribute('data-eid')) {
       deselect();
     }
   });
@@ -369,11 +418,21 @@ export const EDITOR_SCRIPT = `
     }
   });
 
-  window.addEventListener('scroll', positionOverlay, true);
-  window.addEventListener('resize', positionOverlay);
+  window.addEventListener('scroll', function () { positionOverlay(); syncGlass(); }, true);
+  window.addEventListener('resize', function () { positionOverlay(); syncGlass(); });
   window.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') deselect();
   });
+
+  function syncGlass() {
+    if (interactionGlass && selected && isReplacedElement(selected)) {
+      var rr = selected.getBoundingClientRect();
+      interactionGlass.style.left = rr.left + 'px';
+      interactionGlass.style.top = rr.top + 'px';
+      interactionGlass.style.width = rr.width + 'px';
+      interactionGlass.style.height = rr.height + 'px';
+    }
+  }
 
   // ---- 接收主框架指令 ----
   window.addEventListener('message', function (ev) {
