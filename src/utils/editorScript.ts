@@ -129,12 +129,11 @@ export const EDITOR_SCRIPT = `
     e.preventDefault();
     e.stopPropagation();
     selectEl(el);
-    makeAbsolute(el);
-    var r = el.getBoundingClientRect();
     dragState = {
       startX: e.clientX, startY: e.clientY,
       origLeft: parseFloat(el.style.left) || 0,
-      origTop: parseFloat(el.style.top) || 0
+      origTop: parseFloat(el.style.top) || 0,
+      madeAbsolute: false
     };
     post({ type: 'begin' });
     document.addEventListener('mousemove', onDrag);
@@ -143,6 +142,12 @@ export const EDITOR_SCRIPT = `
 
   function onDrag(e) {
     if (!dragState || !selected) return;
+    if (!dragState.madeAbsolute) {
+      makeAbsolute(selected);
+      dragState.madeAbsolute = true;
+      dragState.origLeft = parseFloat(selected.style.left) || 0;
+      dragState.origTop = parseFloat(selected.style.top) || 0;
+    }
     var dx = e.clientX - dragState.startX;
     var dy = e.clientY - dragState.startY;
     selected.style.left = (dragState.origLeft + dx) + 'px';
@@ -169,14 +174,13 @@ export const EDITOR_SCRIPT = `
     e.stopPropagation();
     var dir = e.target.getAttribute('data-dir');
     var r = selected.getBoundingClientRect();
-    var cs = getComputedStyle(selected);
     resizeState = {
       dir: dir, startX: e.clientX, startY: e.clientY,
       left: parseFloat(selected.style.left) || (r.left - SLIDE.getBoundingClientRect().left),
       top: parseFloat(selected.style.top) || (r.top - SLIDE.getBoundingClientRect().top),
-      width: r.width, height: r.height
+      width: r.width, height: r.height,
+      madeAbsolute: false
     };
-    if (getComputedStyle(selected).position !== 'absolute') makeAbsolute(selected);
     post({ type: 'begin' });
     document.addEventListener('mousemove', onResize);
     document.addEventListener('mouseup', endResize);
@@ -184,6 +188,19 @@ export const EDITOR_SCRIPT = `
 
   function onResize(e) {
     if (!resizeState || !selected) return;
+    if (!resizeState.madeAbsolute) {
+      var isAbsolute = getComputedStyle(selected).position === 'absolute';
+      if (!isAbsolute) {
+        makeAbsolute(selected);
+        var sr2 = SLIDE.getBoundingClientRect();
+        var r2 = selected.getBoundingClientRect();
+        resizeState.left = r2.left - sr2.left;
+        resizeState.top = r2.top - sr2.top;
+        resizeState.width = r2.width;
+        resizeState.height = r2.height;
+      }
+      resizeState.madeAbsolute = true;
+    }
     var dx = e.clientX - resizeState.startX;
     var dy = e.clientY - resizeState.startY;
     var d = resizeState.dir;
